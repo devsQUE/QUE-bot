@@ -30,7 +30,7 @@ bot.onText(/\/start (.+)/, (msg, match) => {
   const payload = match[1];
 
   if (payload === "neon_typer") {
-    const filePath = path.join(__dirname, "neon-typer.zip");
+    const filePath = path.join(__dirname, "Neon-Typer.zip");
 
     bot.sendDocument(chatId, filePath, {
       caption:
