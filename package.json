@@ -1,12 +1,12 @@
 {
-  "name": "telegram-bot",
+  "name": "que-bot",
   "version": "1.0.0",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.64.0"
+    "node-telegram-bot-api": "^0.67.0"
   }
 }
 
