@@ -82,7 +82,8 @@ let pendingPublish = null;
 
 // ===== /start (USER) =====
 bot.onText(/\/start(?:\s(.+))?/, (msg) => {
-  const payload = msg.match[1];
+  const payload = msg.match?.[1];
+
   if (!payload) return;
 
   const project = projects[payload];
