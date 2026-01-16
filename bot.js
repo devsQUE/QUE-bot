@@ -16,8 +16,8 @@ if (!TOKEN || !ADMIN_ID || !BASE_URL) {
 }
 
 // ===== config =====
-const CHANNEL_ID = -1003311885654;
-const CHANNEL_NAME = "testing8287";
+const CHANNEL_ID = -1003033363584;
+const CHANNEL_NAME = "devsQUE";
 const SUBSCRIBE_URL = "https://www.youtube.com/@devsQUE";
 
 const DEFAULT_CAPTION =
