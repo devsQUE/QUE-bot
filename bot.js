@@ -4,6 +4,15 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled promise rejection:", err?.message || err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err?.message || err);
+});
+
+
 // ===== env =====
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID);
