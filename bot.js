@@ -1,156 +1,152 @@
 // ===== imports =====
 const TelegramBot = require("node-telegram-bot-api");
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
+const { createClient } = require("@supabase/supabase-js");
 
-process.on("unhandledRejection", (err) => {
-  console.error("Unhandled promise rejection:", err?.message || err);
-});
-
-process.on("uncaughtException", (err) => {
-  console.error("Uncaught exception:", err?.message || err);
-});
-
+// ===== safety =====
+process.on("unhandledRejection", err =>
+  console.error("Unhandled rejection:", err)
+);
+process.on("uncaughtException", err =>
+  console.error("Uncaught exception:", err)
+);
 
 // ===== env =====
-const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = Number(process.env.ADMIN_ID);
-const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.RENDER_EXTERNAL_URL;
+const {
+  BOT_TOKEN,
+  ADMIN_ID,
+  PORT = 3000,
+  RENDER_EXTERNAL_URL,
+  SUPABASE_URL,
+  SUPABASE_SERVICE_KEY
+} = process.env;
 
-if (!TOKEN || !ADMIN_ID || !BASE_URL) {
-  console.error("❌ Missing env vars");
+if (
+  !BOT_TOKEN ||
+  !ADMIN_ID ||
+  !RENDER_EXTERNAL_URL ||
+  !SUPABASE_URL ||
+  !SUPABASE_SERVICE_KEY
+) {
+  console.error("❌ Missing required environment variables");
   process.exit(1);
 }
 
 // ===== config =====
-const CHANNEL_ID = -1003033363584;
-const CHANNEL_NAME = "devsQUE";
+const CHANNEL_ID = -1003033363584; // numeric ID
+const CHANNEL_NAME = "devsQUE";   // username
 const SUBSCRIBE_URL = "https://www.youtube.com/@devsQUE";
 
 const DEFAULT_CAPTION =
   "🎉 Here’s your code!\n\n" +
   "Hope this helps 🙂\n" +
-  "If you enjoyed it, don’t forget to like, share, and comment on the reel.\n\n" +
+  "If you enjoyed it, don’t forget to like, share, and comment.\n\n" +
   "Thanks for your support!";
 
-// ===== bot =====
-const bot = new TelegramBot(TOKEN);
-
-// ===== webhook server =====
+// ===== init =====
+const bot = new TelegramBot(BOT_TOKEN);
 const app = express();
 app.use(express.json());
 
-bot.setWebHook(`${BASE_URL}/bot${TOKEN}`);
-
-app.post(`/bot${TOKEN}`, (req, res) => {
+// ===== webhook =====
+bot.setWebHook(`${RENDER_EXTERNAL_URL}/bot${BOT_TOKEN}`);
+app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
+app.listen(PORT, () =>
+  console.log("🤖 Bot running (webhook mode)")
+);
 
-app.listen(PORT, () => {
-  console.log("🤖 Bot running via webhook");
-});
+// ===== supabase =====
+const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_KEY
+);
 
 // ===== helpers =====
-const isAdmin = id => id === ADMIN_ID;
-
-// ===== storage =====
-const PROJECTS_FILE = path.join(__dirname, "projects.json");
-let projects = {};
-
-if (fs.existsSync(PROJECTS_FILE)) {
-  try {
-    const raw = fs.readFileSync(PROJECTS_FILE, "utf8");
-    projects = raw ? JSON.parse(raw) : {};
-  } catch {
-    projects = {};
-  }
-}
-
-const save = () =>
-  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
+const isAdmin = id => Number(id) === Number(ADMIN_ID);
 
 // ===== state =====
 let pending = null;
 
-// ===== /start =====
-bot.onText(/\/start(?:\s(.+))?/, (msg, match) => {
-  const payload = match?.[1];
+// ===================================================
+// ================= USER FLOW =======================
+// ===================================================
 
+// /start payload
+bot.onText(/\/start(?:\s(.+))?/, async (msg, match) => {
+  const payload = match?.[1];
   if (!payload) {
     bot.sendMessage(
       msg.chat.id,
-      "👋 Open a project from the channel to get source code."
+      "👋 Open a project from the channel to get the source code."
     );
     return;
   }
 
-  const project = projects[payload];
-  if (!project) {
+  const { data, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("payload", payload)
+    .single();
+
+  if (error || !data) {
     bot.sendMessage(msg.chat.id, "❌ Project not found.");
     return;
   }
 
-  bot.sendDocument(msg.chat.id, project.zip, {
+  bot.sendDocument(msg.chat.id, data.zip_file_id, {
     caption: DEFAULT_CAPTION,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🎬 Watch", url: project.watch }],
+        [{ text: "🎬 Watch", url: data.watch_url }],
         [{ text: "🔔 Subscribe", url: SUBSCRIBE_URL }]
       ]
     }
   });
 });
 
-// ===== /projects (ADMIN) =====
-bot.onText(/\/projects$/, msg => {
+// ===================================================
+// ================= ADMIN FLOW ======================
+// ===================================================
+
+// /publish payload | watch_url
+bot.onText(/\/publish (.+)/, async (msg, match) => {
   if (!isAdmin(msg.from.id)) return;
 
-  const keys = Object.keys(projects);
-  if (!keys.length) {
-    bot.sendMessage(msg.chat.id, "📭 No projects yet.");
+  const [payload, watch_url] =
+    match[1].split("|").map(s => s.trim());
+
+  if (!payload || !watch_url) {
+    bot.sendMessage(msg.chat.id, "❌ Usage:\n/publish name | url");
     return;
   }
 
-  const kb = keys.map(k => ([
-    { text: k, url: `https://t.me/${CHANNEL_NAME}/${projects[k].msg}` }
-  ]));
+  const { data } = await supabase
+    .from("projects")
+    .select("payload")
+    .eq("payload", payload)
+    .single();
 
-  bot.sendMessage(msg.chat.id, "📦 Published projects:", {
-    reply_markup: { inline_keyboard: kb }
-  });
-});
-
-// ===== /publish =====
-bot.onText(/\/publish (.+)/, (msg, match) => {
-  if (!isAdmin(msg.from.id)) return;
-
-  const [payload, watch] = match[1].split("|").map(s => s.trim());
-  if (!payload || !watch) {
-    bot.sendMessage(msg.chat.id, "❌ Usage: /publish name | url");
+  if (data) {
+    bot.sendMessage(msg.chat.id, "❌ Payload already exists.");
     return;
   }
 
-  if (projects[payload]) {
-    bot.sendMessage(msg.chat.id, "❌ Payload exists.");
-    return;
-  }
-
-  pending = { payload, watch };
+  pending = { payload, watch_url };
   bot.sendMessage(msg.chat.id, "📦 Send ZIP file.");
 });
 
-// ===== ZIP =====
+// ZIP upload
 bot.on("document", msg => {
   if (!pending || !isAdmin(msg.from.id)) return;
 
-  pending.zip = msg.document.file_id;
-  bot.sendMessage(msg.chat.id, "🖼 Send thumbnail.");
+  pending.zip_file_id = msg.document.file_id;
+  bot.sendMessage(msg.chat.id, "🖼 Send thumbnail image.");
 });
 
-// ===== thumbnail =====
+// thumbnail upload
 bot.on("photo", msg => {
   if (!pending || !isAdmin(msg.from.id)) return;
 
@@ -158,69 +154,103 @@ bot.on("photo", msg => {
   bot.sendMessage(msg.chat.id, "✍️ Send channel description.");
 });
 
-// ===== description + preview =====
+// description + preview
 bot.on("message", async msg => {
   if (!pending || !isAdmin(msg.from.id)) return;
-  if (msg.text?.startsWith("/")) return;
+  if (!msg.text || msg.text.startsWith("/")) return;
 
-  const desc = msg.text;
+  pending.description = msg.text;
 
   await bot.sendPhoto(msg.chat.id, pending.thumb, {
-    caption: desc,
+    caption: pending.description,
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "⚙️ Source Code", url: `https://t.me/devsquebot?start=${pending.payload}` }
+          {
+            text: "⚙️ Source Code",
+            url: `https://t.me/devsquebot?start=${pending.payload}`
+          }
         ],
         [
           { text: "🔔 Subscribe", url: SUBSCRIBE_URL },
-          { text: "🎬 Watch", url: pending.watch }
+          { text: "🎬 Watch", url: pending.watch_url }
         ],
         [
-          { text: "✅ Publish", callback_data: "ok" },
-          { text: "❌ Cancel", callback_data: "no" }
+          { text: "✅ Publish", callback_data: "publish_ok" },
+          { text: "❌ Cancel", callback_data: "publish_cancel" }
         ]
       ]
     }
   });
-
-  pending.desc = desc;
 });
 
-// ===== callbacks =====
+// publish / cancel
 bot.on("callback_query", async q => {
   if (!pending || !isAdmin(q.from.id)) return;
 
-  if (q.data === "no") {
+  if (q.data === "publish_cancel") {
     pending = null;
-    bot.sendMessage(q.message.chat.id, "❌ Cancelled.");
+    bot.sendMessage(q.message.chat.id, "❌ Publishing cancelled.");
     return;
   }
 
-  if (q.data === "ok") {
-    const sent = await bot.sendPhoto(CHANNEL_ID, pending.thumb, {
-      caption: pending.desc,
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "⚙️ Source Code", url: `https://t.me/devsquebot?start=${pending.payload}` }
-          ],
-          [
-            { text: "🔔 Subscribe", url: SUBSCRIBE_URL },
-            { text: "🎬 Watch", url: pending.watch }
+  if (q.data === "publish_ok") {
+    const sent = await bot.sendPhoto(
+      CHANNEL_ID,
+      pending.thumb,
+      {
+        caption: pending.description,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "⚙️ Source Code",
+                url: `https://t.me/devsquebot?start=${pending.payload}`
+              }
+            ],
+            [
+              { text: "🔔 Subscribe", url: SUBSCRIBE_URL },
+              { text: "🎬 Watch", url: pending.watch_url }
+            ]
           ]
-        ]
+        }
       }
+    );
+
+    await supabase.from("projects").insert({
+      payload: pending.payload,
+      zip_file_id: pending.zip_file_id,
+      watch_url: pending.watch_url,
+      channel_message_id: sent.message_id
     });
 
-    projects[pending.payload] = {
-      zip: pending.zip,
-      watch: pending.watch,
-      msg: sent.message_id
-    };
-
-    save();
     pending = null;
-    bot.sendMessage(q.message.chat.id, "✅ Published.");
+    bot.sendMessage(q.message.chat.id, "✅ Project published.");
   }
+});
+
+// /projects (admin)
+bot.onText(/\/projects$/, async msg => {
+  if (!isAdmin(msg.from.id)) return;
+
+  const { data } = await supabase
+    .from("projects")
+    .select("payload, channel_message_id")
+    .order("created_at", { ascending: false });
+
+  if (!data || !data.length) {
+    bot.sendMessage(msg.chat.id, "📭 No projects found.");
+    return;
+  }
+
+  const keyboard = data.map(p => ([
+    {
+      text: p.payload,
+      url: `https://t.me/${CHANNEL_NAME}/${p.channel_message_id}`
+    }
+  ]));
+
+  bot.sendMessage(msg.chat.id, "📦 Published projects:", {
+    reply_markup: { inline_keyboard: keyboard }
+  });
 });
