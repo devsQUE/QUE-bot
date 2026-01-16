@@ -14,8 +14,8 @@ if (!TOKEN || !ADMIN_ID) {
 }
 
 // Channel config
-const CHANNEL_ID = -1003311885654;
-const CHANNEL_NAME = "testing8287";
+const CHANNEL_ID = -1003311885654;   // numeric channel ID
+const CHANNEL_NAME = "testing8287";  // channel username (no @)
 const SUBSCRIBE_URL = "https://www.youtube.com/@devsQUE";
 
 const DEFAULT_CAPTION =
@@ -52,22 +52,36 @@ app.listen(PORT, () => {
 });
 
 // ===== helpers =====
-const isAdmin = id => id === ADMIN_ID;
+const isAdmin = (id) => id === ADMIN_ID;
 
-// ===== persistence (ephemeral on Render) =====
+// ===== persistence (SAFE JSON HANDLING) =====
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
-let projects = fs.existsSync(PROJECTS_FILE)
-  ? JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf-8"))
-  : {};
 
-const saveProjects = () =>
+let projects = {};
+
+// define BEFORE use (important)
+const saveProjects = () => {
   fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
+};
+
+if (fs.existsSync(PROJECTS_FILE)) {
+  try {
+    const raw = fs.readFileSync(PROJECTS_FILE, "utf-8").trim();
+    projects = raw ? JSON.parse(raw) : {};
+  } catch (err) {
+    console.error("⚠️ Corrupted projects.json, resetting...");
+    projects = {};
+  }
+}
+
+// always ensure file exists
+saveProjects();
 
 // ===== state =====
 let pendingPublish = null;
 
-// ===== /start =====
-bot.onText(/\/start(?:\s(.+))?/, msg => {
+// ===== /start (USER) =====
+bot.onText(/\/start(?:\s(.+))?/, (msg) => {
   const payload = msg.match[1];
   if (!payload) return;
 
@@ -88,8 +102,9 @@ bot.onText(/\/start(?:\s(.+))?/, msg => {
   });
 });
 
-// ===== /publish =====
-bot.onText(/\/publish (.+)/, msg => {
+// ===== /publish (ADMIN) =====
+// Format: /publish payload | watch_url
+bot.onText(/\/publish (.+)/, (msg) => {
   if (!isAdmin(msg.from.id)) return;
 
   const parts = msg.match[1].split("|").map(p => p.trim());
@@ -99,6 +114,7 @@ bot.onText(/\/publish (.+)/, msg => {
   }
 
   const [payload, watchUrl] = parts;
+
   if (projects[payload]) {
     bot.sendMessage(msg.chat.id, "❌ Payload already exists.");
     return;
@@ -108,22 +124,24 @@ bot.onText(/\/publish (.+)/, msg => {
   bot.sendMessage(msg.chat.id, "📦 Send ZIP file.");
 });
 
-// ===== ZIP =====
-bot.on("document", msg => {
+// ===== receive ZIP =====
+bot.on("document", (msg) => {
   if (!pendingPublish || !isAdmin(msg.from.id)) return;
+
   pendingPublish.zipFileId = msg.document.file_id;
   bot.sendMessage(msg.chat.id, "🖼 Send thumbnail image.");
 });
 
-// ===== thumbnail =====
-bot.on("photo", msg => {
+// ===== receive thumbnail =====
+bot.on("photo", (msg) => {
   if (!pendingPublish || !isAdmin(msg.from.id)) return;
+
   pendingPublish.thumbFileId = msg.photo.at(-1).file_id;
   bot.sendMessage(msg.chat.id, "✍️ Send channel description.");
 });
 
-// ===== description + preview =====
-bot.on("message", async msg => {
+// ===== description → PREVIEW =====
+bot.on("message", async (msg) => {
   if (
     !pendingPublish ||
     !isAdmin(msg.from.id) ||
@@ -133,6 +151,7 @@ bot.on("message", async msg => {
   ) return;
 
   pendingPublish.description = msg.text;
+
   const { payload, watchUrl, thumbFileId, description } = pendingPublish;
 
   await bot.sendPhoto(msg.chat.id, thumbFileId, {
@@ -154,12 +173,14 @@ bot.on("message", async msg => {
 });
 
 // ===== callbacks =====
-bot.on("callback_query", async q => {
+bot.on("callback_query", async (q) => {
   if (!pendingPublish || !isAdmin(q.from.id)) return;
+
+  const chatId = q.message.chat.id;
 
   if (q.data === "publish_cancel") {
     pendingPublish = null;
-    bot.sendMessage(q.message.chat.id, "❌ Publishing cancelled.");
+    bot.sendMessage(chatId, "❌ Publishing cancelled.");
     return;
   }
 
@@ -187,17 +208,23 @@ bot.on("callback_query", async q => {
 
     saveProjects();
     pendingPublish = null;
-    bot.sendMessage(q.message.chat.id, "✅ Project published.");
+
+    bot.sendMessage(chatId, "✅ Project published.");
   }
 });
 
-// ===== /projects =====
-bot.onText(/\/projects$/, msg => {
+// ===== /projects (ADMIN) =====
+bot.onText(/\/projects$/, (msg) => {
   if (!isAdmin(msg.from.id)) return;
 
-  const keyboard = Object.entries(projects).map(([key, p]) => ([
-    { text: key, url: `https://t.me/${CHANNEL_NAME}/${p.channelMessageId}` }
-  ]));
+  const keyboard = Object.entries(projects)
+    .filter(([_, p]) => p.channelMessageId)
+    .map(([key, p]) => ([
+      {
+        text: key,
+        url: `https://t.me/${CHANNEL_NAME}/${p.channelMessageId}`
+      }
+    ]));
 
   if (!keyboard.length) {
     bot.sendMessage(msg.chat.id, "📭 No projects found.");
