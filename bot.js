@@ -4,43 +4,36 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 
-// ===== config =====
+// ===== env =====
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = Number(process.env.ADMIN_ID);
+const PORT = process.env.PORT || 3000;
+const BASE_URL = process.env.RENDER_EXTERNAL_URL;
 
-if (!TOKEN || !ADMIN_ID) {
-  console.error("❌ Missing BOT_TOKEN or ADMIN_ID");
+if (!TOKEN || !ADMIN_ID || !BASE_URL) {
+  console.error("❌ Missing env vars");
   process.exit(1);
 }
 
-// Channel config
-const CHANNEL_ID = -1003311885654;   // numeric channel ID
-const CHANNEL_NAME = "testing8287";  // channel username (no @)
+// ===== config =====
+const CHANNEL_ID = -1003311885654;
+const CHANNEL_NAME = "testing8287";
 const SUBSCRIBE_URL = "https://www.youtube.com/@devsQUE";
 
 const DEFAULT_CAPTION =
   "🎉 Here’s your code!\n\n" +
   "Hope this helps 🙂\n" +
-  "If you enjoyed it, don’t forget to like, share, and leave a comment on the reel " +
-  "so others know you received the code via Telegram.\n\n" +
-  "Thanks a lot for your support!";
+  "If you enjoyed it, don’t forget to like, share, and comment on the reel.\n\n" +
+  "Thanks for your support!";
 
-// ===== init bot =====
+// ===== bot =====
 const bot = new TelegramBot(TOKEN);
 
 // ===== webhook server =====
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const URL = process.env.RENDER_EXTERNAL_URL;
-
-if (!URL) {
-  console.error("❌ RENDER_EXTERNAL_URL not set");
-  process.exit(1);
-}
-
-bot.setWebHook(`${URL}/bot${TOKEN}`);
+bot.setWebHook(`${BASE_URL}/bot${TOKEN}`);
 
 app.post(`/bot${TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
@@ -52,39 +45,38 @@ app.listen(PORT, () => {
 });
 
 // ===== helpers =====
-const isAdmin = (id) => id === ADMIN_ID;
+const isAdmin = id => id === ADMIN_ID;
 
-// ===== persistence (SAFE JSON HANDLING) =====
+// ===== storage =====
 const PROJECTS_FILE = path.join(__dirname, "projects.json");
-
 let projects = {};
-
-// define BEFORE use (important)
-const saveProjects = () => {
-  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
-};
 
 if (fs.existsSync(PROJECTS_FILE)) {
   try {
-    const raw = fs.readFileSync(PROJECTS_FILE, "utf-8").trim();
+    const raw = fs.readFileSync(PROJECTS_FILE, "utf8");
     projects = raw ? JSON.parse(raw) : {};
-  } catch (err) {
-    console.error("⚠️ Corrupted projects.json, resetting...");
+  } catch {
     projects = {};
   }
 }
 
-// always ensure file exists
-saveProjects();
+const save = () =>
+  fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
 
 // ===== state =====
-let pendingPublish = null;
+let pending = null;
 
-// ===== /start (USER) =====
-bot.onText(/\/start(?:\s(.+))?/, (msg) => {
-  const payload = msg.match?.[1];
+// ===== /start =====
+bot.onText(/\/start(?:\s(.+))?/, (msg, match) => {
+  const payload = match?.[1];
 
-  if (!payload) return;
+  if (!payload) {
+    bot.sendMessage(
+      msg.chat.id,
+      "👋 Open a project from the channel to get source code."
+    );
+    return;
+  }
 
   const project = projects[payload];
   if (!project) {
@@ -92,147 +84,134 @@ bot.onText(/\/start(?:\s(.+))?/, (msg) => {
     return;
   }
 
-  bot.sendDocument(msg.chat.id, project.zipFileId, {
+  bot.sendDocument(msg.chat.id, project.zip, {
     caption: DEFAULT_CAPTION,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🎬 Watch", url: project.watchUrl }],
+        [{ text: "🎬 Watch", url: project.watch }],
         [{ text: "🔔 Subscribe", url: SUBSCRIBE_URL }]
       ]
     }
   });
 });
 
-// ===== /publish (ADMIN) =====
-// Format: /publish payload | watch_url
-bot.onText(/\/publish (.+)/, (msg) => {
+// ===== /projects (ADMIN) =====
+bot.onText(/\/projects$/, msg => {
   if (!isAdmin(msg.from.id)) return;
 
-  const parts = msg.match[1].split("|").map(p => p.trim());
-  if (parts.length !== 2) {
-    bot.sendMessage(msg.chat.id, "❌ Usage:\n/publish payload | watch_url");
+  const keys = Object.keys(projects);
+  if (!keys.length) {
+    bot.sendMessage(msg.chat.id, "📭 No projects yet.");
     return;
   }
 
-  const [payload, watchUrl] = parts;
+  const kb = keys.map(k => ([
+    { text: k, url: `https://t.me/${CHANNEL_NAME}/${projects[k].msg}` }
+  ]));
+
+  bot.sendMessage(msg.chat.id, "📦 Published projects:", {
+    reply_markup: { inline_keyboard: kb }
+  });
+});
+
+// ===== /publish =====
+bot.onText(/\/publish (.+)/, (msg, match) => {
+  if (!isAdmin(msg.from.id)) return;
+
+  const [payload, watch] = match[1].split("|").map(s => s.trim());
+  if (!payload || !watch) {
+    bot.sendMessage(msg.chat.id, "❌ Usage: /publish name | url");
+    return;
+  }
 
   if (projects[payload]) {
-    bot.sendMessage(msg.chat.id, "❌ Payload already exists.");
+    bot.sendMessage(msg.chat.id, "❌ Payload exists.");
     return;
   }
 
-  pendingPublish = { payload, watchUrl };
+  pending = { payload, watch };
   bot.sendMessage(msg.chat.id, "📦 Send ZIP file.");
 });
 
-// ===== receive ZIP =====
-bot.on("document", (msg) => {
-  if (!pendingPublish || !isAdmin(msg.from.id)) return;
+// ===== ZIP =====
+bot.on("document", msg => {
+  if (!pending || !isAdmin(msg.from.id)) return;
 
-  pendingPublish.zipFileId = msg.document.file_id;
-  bot.sendMessage(msg.chat.id, "🖼 Send thumbnail image.");
+  pending.zip = msg.document.file_id;
+  bot.sendMessage(msg.chat.id, "🖼 Send thumbnail.");
 });
 
-// ===== receive thumbnail =====
-bot.on("photo", (msg) => {
-  if (!pendingPublish || !isAdmin(msg.from.id)) return;
+// ===== thumbnail =====
+bot.on("photo", msg => {
+  if (!pending || !isAdmin(msg.from.id)) return;
 
-  pendingPublish.thumbFileId = msg.photo.at(-1).file_id;
+  pending.thumb = msg.photo.at(-1).file_id;
   bot.sendMessage(msg.chat.id, "✍️ Send channel description.");
 });
 
-// ===== description → PREVIEW =====
-bot.on("message", async (msg) => {
-  if (
-    !pendingPublish ||
-    !isAdmin(msg.from.id) ||
-    msg.chat.type !== "private" ||
-    !msg.text ||
-    msg.text.startsWith("/")
-  ) return;
+// ===== description + preview =====
+bot.on("message", async msg => {
+  if (!pending || !isAdmin(msg.from.id)) return;
+  if (msg.text?.startsWith("/")) return;
 
-  pendingPublish.description = msg.text;
+  const desc = msg.text;
 
-  const { payload, watchUrl, thumbFileId, description } = pendingPublish;
-
-  await bot.sendPhoto(msg.chat.id, thumbFileId, {
-    caption: description,
+  await bot.sendPhoto(msg.chat.id, pending.thumb, {
+    caption: desc,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "⚙️ Source Code", url: `https://t.me/devsquebot?start=${payload}` }],
         [
-          { text: "🔔 Subscribe", url: SUBSCRIBE_URL },
-          { text: "🎬 Watch", url: watchUrl }
+          { text: "⚙️ Source Code", url: `https://t.me/devsquebot?start=${pending.payload}` }
         ],
         [
-          { text: "✅ Publish", callback_data: "publish_confirm" },
-          { text: "❌ Cancel", callback_data: "publish_cancel" }
+          { text: "🔔 Subscribe", url: SUBSCRIBE_URL },
+          { text: "🎬 Watch", url: pending.watch }
+        ],
+        [
+          { text: "✅ Publish", callback_data: "ok" },
+          { text: "❌ Cancel", callback_data: "no" }
         ]
       ]
     }
   });
+
+  pending.desc = desc;
 });
 
 // ===== callbacks =====
-bot.on("callback_query", async (q) => {
-  if (!pendingPublish || !isAdmin(q.from.id)) return;
+bot.on("callback_query", async q => {
+  if (!pending || !isAdmin(q.from.id)) return;
 
-  const chatId = q.message.chat.id;
-
-  if (q.data === "publish_cancel") {
-    pendingPublish = null;
-    bot.sendMessage(chatId, "❌ Publishing cancelled.");
+  if (q.data === "no") {
+    pending = null;
+    bot.sendMessage(q.message.chat.id, "❌ Cancelled.");
     return;
   }
 
-  if (q.data === "publish_confirm") {
-    const { payload, watchUrl, zipFileId, thumbFileId, description } = pendingPublish;
-
-    const sent = await bot.sendPhoto(CHANNEL_ID, thumbFileId, {
-      caption: description,
+  if (q.data === "ok") {
+    const sent = await bot.sendPhoto(CHANNEL_ID, pending.thumb, {
+      caption: pending.desc,
       reply_markup: {
         inline_keyboard: [
-          [{ text: "⚙️ Source Code", url: `https://t.me/devsquebot?start=${payload}` }],
+          [
+            { text: "⚙️ Source Code", url: `https://t.me/devsquebot?start=${pending.payload}` }
+          ],
           [
             { text: "🔔 Subscribe", url: SUBSCRIBE_URL },
-            { text: "🎬 Watch", url: watchUrl }
+            { text: "🎬 Watch", url: pending.watch }
           ]
         ]
       }
     });
 
-    projects[payload] = {
-      zipFileId,
-      watchUrl,
-      channelMessageId: sent.message_id
+    projects[pending.payload] = {
+      zip: pending.zip,
+      watch: pending.watch,
+      msg: sent.message_id
     };
 
-    saveProjects();
-    pendingPublish = null;
-
-    bot.sendMessage(chatId, "✅ Project published.");
+    save();
+    pending = null;
+    bot.sendMessage(q.message.chat.id, "✅ Published.");
   }
-});
-
-// ===== /projects (ADMIN) =====
-bot.onText(/\/projects$/, (msg) => {
-  if (!isAdmin(msg.from.id)) return;
-
-  const keyboard = Object.entries(projects)
-    .filter(([_, p]) => p.channelMessageId)
-    .map(([key, p]) => ([
-      {
-        text: key,
-        url: `https://t.me/${CHANNEL_NAME}/${p.channelMessageId}`
-      }
-    ]));
-
-  if (!keyboard.length) {
-    bot.sendMessage(msg.chat.id, "📭 No projects found.");
-    return;
-  }
-
-  bot.sendMessage(msg.chat.id, "📦 Published Projects:", {
-    reply_markup: { inline_keyboard: keyboard }
-  });
 });
