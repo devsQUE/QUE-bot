@@ -1,16 +1,20 @@
 {
   "name": "que-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Telegram bot for source code distribution",
   "main": "bot.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node bot.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["telegram", "bot", "nodejs"],
+  "author": "devsQUE",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "express": "^4.19.2",
     "node-telegram-bot-api": "^0.67.0"
   }
 }
