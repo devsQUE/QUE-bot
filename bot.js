@@ -33,8 +33,8 @@ if (
 }
 
 // ===== config =====
-const CHANNEL_ID = -1003033363584; // numeric ID
-const CHANNEL_NAME = "devsQUE";   // username
+const CHANNEL_ID = -1003033363584; // numeric channel ID
+const CHANNEL_NAME = "devsQUE";   // channel username (NO @)
 const SUBSCRIBE_URL = "https://www.youtube.com/@devsQUE";
 
 const DEFAULT_CAPTION =
@@ -55,7 +55,7 @@ app.post(`/bot${BOT_TOKEN}`, (req, res) => {
   res.sendStatus(200);
 });
 app.listen(PORT, () =>
-  console.log("🤖 Bot running (webhook mode)")
+  console.log("🤖 Bot running via webhook")
 );
 
 // ===== supabase =====
@@ -67,6 +67,16 @@ const supabase = createClient(
 // ===== helpers =====
 const isAdmin = id => Number(id) === Number(ADMIN_ID);
 
+async function isUserJoinedChannel(userId) {
+  try {
+    const member = await bot.getChatMember(CHANNEL_ID, userId);
+    return ["member", "administrator", "creator"].includes(member.status);
+  } catch (err) {
+    console.error("Channel check failed:", err.message);
+    return false;
+  }
+}
+
 // ===== state =====
 let pending = null;
 
@@ -77,6 +87,7 @@ let pending = null;
 // /start payload
 bot.onText(/\/start(?:\s(.+))?/, async (msg, match) => {
   const payload = match?.[1];
+
   if (!payload) {
     bot.sendMessage(
       msg.chat.id,
@@ -85,6 +96,35 @@ bot.onText(/\/start(?:\s(.+))?/, async (msg, match) => {
     return;
   }
 
+  // 🔒 CHECK CHANNEL JOIN
+  const joined = await isUserJoinedChannel(msg.from.id);
+  if (!joined) {
+    bot.sendMessage(
+      msg.chat.id,
+      "🚫 You must join our channel to access source code.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "📢 Join Channel",
+                url: `https://t.me/${CHANNEL_NAME}`
+              }
+            ],
+            [
+              {
+                text: "🔄 Try Again",
+                url: `https://t.me/devsquebot?start=${payload}`
+              }
+            ]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  // 📦 FETCH PROJECT
   const { data, error } = await supabase
     .from("projects")
     .select("*")
@@ -96,6 +136,7 @@ bot.onText(/\/start(?:\s(.+))?/, async (msg, match) => {
     return;
   }
 
+  // ✅ SEND ZIP
   bot.sendDocument(msg.chat.id, data.zip_file_id, {
     caption: DEFAULT_CAPTION,
     reply_markup: {
@@ -138,7 +179,7 @@ bot.onText(/\/publish (.+)/, async (msg, match) => {
   bot.sendMessage(msg.chat.id, "📦 Send ZIP file.");
 });
 
-// ZIP upload
+// ZIP
 bot.on("document", msg => {
   if (!pending || !isAdmin(msg.from.id)) return;
 
@@ -146,7 +187,7 @@ bot.on("document", msg => {
   bot.sendMessage(msg.chat.id, "🖼 Send thumbnail image.");
 });
 
-// thumbnail upload
+// Thumbnail
 bot.on("photo", msg => {
   if (!pending || !isAdmin(msg.from.id)) return;
 
@@ -154,7 +195,7 @@ bot.on("photo", msg => {
   bot.sendMessage(msg.chat.id, "✍️ Send channel description.");
 });
 
-// description + preview
+// Description + preview
 bot.on("message", async msg => {
   if (!pending || !isAdmin(msg.from.id)) return;
   if (!msg.text || msg.text.startsWith("/")) return;
@@ -184,7 +225,7 @@ bot.on("message", async msg => {
   });
 });
 
-// publish / cancel
+// Publish / Cancel
 bot.on("callback_query", async q => {
   if (!pending || !isAdmin(q.from.id)) return;
 
